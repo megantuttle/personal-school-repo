@@ -6,11 +6,11 @@ clc
 close all
 
 %% Path setup for getting table values from HOT Calc
-addpath('/home/brownlab/MeganWorkingDir/Jet Lab - 3-8-16/DaqViewDataEXCEL');
+addpath('/home/brownlab/MeganWorkingDir/personal-school-repo/Jet Lab - 3-8-16/DaqViewDataEXCEL');
 
-addpath('/home/brownlab/MeganWorkingDir/HOT Thermochemical Calculator/HOT_R2',...
-    '/home/brownlab/MeganWorkingDir/HOT Thermochemical Calculator/HOT_R2/HOT',...
-    '/home/brownlab/MeganWorkingDir/HOT Thermochemical Calculator/HOT_R2/utility');
+addpath('/home/brownlab/MeganWorkingDir/personal-school-repo/HOT Thermochemical Calculator/HOT_R2',...
+    '/home/brownlab/MeganWorkingDir/personal-school-repo/HOT Thermochemical Calculator/HOT_R2/HOT',...
+    '/home/brownlab/MeganWorkingDir/personal-school-repo/HOT Thermochemical Calculator/HOT_R2/utility');
 %% Define geometry (areas in in^2)
 %A0 = 26.89; % Inlet bell entrance
 A0 = 0.0167;
@@ -101,15 +101,15 @@ n_cycle = 1-((h0(4)-h0(5))/(h0(3)-h0(2)));
 %n_cycle_data = 1-((mean(H(:,3))-mean(H(:,4)))/(mean(H(:,2))-mean(H(:,1))));
 
 % Power Match between compressor and turbine
-PM = ((mdot_air+mdot_fuel).*(h0(4)-h0(5)))/(mdot_air.*(h0(3)-h0(2))) ;
+PM = ((mdot_air+mdot_fuel).*(h0(4)-h0(5)))./(mdot_air.*(h0(3)-h0(2))) ;
 %PM_data = ((mdot_air+mdot_fuel)*(mean(H(:,3))-mean(H(:,4))))/(mdot_air.*(mean(H(:,2))-mean(H(:,2))));
 % Propulsive Efficiency
-n_prop = (thrust.*V1)/((mdot_air+mdot_fuel).*(h0(5)-H(:,4))-(mdot_air.*(h0(2)-H(:,1)))) ;
+n_prop = (thrust.*V1)./((mdot_air+mdot_fuel).*(h0(5)-H(:,4))-(mdot_air.*(h0(2)-H(:,1)))) ;
 
 % Combustor Efficiency
 f = mdot_fuel./mdot_air;
 Qjeta = 43008 ;    %kJ/kg
-n_comb = ((1+f)*h0(3)-h0(2))/(f*Qjeta);
+n_comb = ((1+f)*h0(3)-h0(2))./(f*Qjeta);
 
 % Compressor Efficiency
 n_comp = (h0(3)-h0(2))/((mean(H(:,2))-mean(H(:,1)))/1000) ;
