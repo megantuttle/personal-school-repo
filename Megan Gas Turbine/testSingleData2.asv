@@ -1,0 +1,145 @@
+%% last edited by Megan Tuttle on 4/3 at 9 am
+% Test code on one data set to ensure all the calculations work for one set
+% before it is placed in the function --> USED THIS ONE TO MAKE FUNCTION
+clear
+clc
+close all
+
+%% Path setup for getting table values from HOT Calc
+addpath('\\samba.lafayette.edu\shared/me_475_1b/Gas Turbine/Jet Lab - 3-8-16/DaqViewDataEXCEL',...
+    '\\samba.lafayette.edu\shared/me_475_1b/Gas Turbine/HOT Thermochemical Calculator/HOT_R2',...
+    '\\samba.lafayette.edu\shared/me_475_1b/Gas Turbine/HOT Thermochemical Calculator/HOT_R2/HOT',...
+    '\\samba.lafayette.edu\shared/me_475_1b/Gas Turbine/HOT Thermochemical Calculator/HOT_R2/utility',...
+    '\\samba.lafayette.edu\shared\me_drive\ME 475 Thermal Properties\CoolProps for PC');
+%% Define geometry (areas in in^2)
+A = [26.89  % bell inlet
+    4.51	% compressor inlet
+    6.63    % compressor exit
+    11.01	% combustor exit
+    4.34	% turbine exit	
+    3.54]*.00064516;	% nozzle exit	
+%% Inputs
+q = input('Load Janaf data (y/n)?','s');
+data = janload('nasa.fit','sort','species');
+air = {'N2', 'O2'};
+m_air = [3.29; 1];
+t_room = 20 + 273.15;      % assumed room temperature K
+p_atm = 101325;            % assumed Pressure, Pa
+s0 = entropy(data, air, m_air, t_room, p_atm);
+rawdata = xlsread('49000.xlsx');
+%% Calculate states
+%       columns: 1=Compressor Inlet, 2=Compressor Exit, 3=Turbine Inlet,
+%       4=Turbine Exit, 5=Exhaust Gas
+
+rawdata(:,3) = rawdata(:,3) * 0.0360912;    % convert inches water to psi
+P(1) = p_atm;  %because the P is the difference between stagnation press and P_atm 
+T(1) = t_room;
+H0(1) = (enthalpy(data, air, m_air, t_room) - enthalpy(data, air, m_air, 0))/1000; % convert J to kJ
+S(1) = entropy(data, air, m_air, t_room, p_atm);
+Y(1) = spratio(data, air, m_air, t_room);
+rho(1) = density(data, air, m_air, T(1), P(1)+p_atm);
+
+for i = 2:6
+    % pressure
+    P(i) = mean((rawdata(:,i+1) + 14.7).*6894.76);   % convert to psig to Pa
+    
+    %temperature
+    T(i) = mean(rawdata(:,i+9) + 273.15);     % convert to K
+    
+    % entropy, enthalpy, "gamma" aka specific heat ratio, density (kg/m^3)
+    S(i) = mean(entropy(data, air, m_air, T(i), P(i)));
+    H0(i) = mean( (enthalpy(data, air, m_air, T(i)) - enthalpy(data, air, m_air, 0))/1000 );
+    Y(i) = mean(spratio(data, air, m_air, T(i)));
+    rho(i) = density(data, air, m_air, T(i), P(i));
+      
+end
+
+% enthalpy depending on T and P from coolprops
+for i = 1:6
+    H(i) = Props('H', 'P', p_atm, 'T', T(i), 'air');
+end
+
+% or should we do enthalpy from velocity?? see below
+
+% ideal gas constant
+R = igconstant(data, air, m_air);       
+
+% other stuff
+fuel_type = 0.797/0.26417;                    % kg/gal
+mdot_fuel = mean(rawdata(:,8))*fuel_type/3600;      % converted gal/hr to kg/s
+RPM = mean(rawdata(:,9));
+thrust = mean(rawdata(:,10)) * 4.44822;             % converted lbs to N
+
+%% Calculations
+% velocity, Mach number calcs
+for i = 1:6
+    coeff = 2/(Y(i)-1);
+    ratioP = (P(i))/p_atm;
+    powerY = (Y(i)-1)/Y(i);
+    Mach(i) = sqrt(coeff * (ratioP^powerY - 1));        % Mach number, duh
+    Tst(i) = t_room /(1 + (Y(i)-1)/2 * Mach(i)^2);      % local static temp
+    a(i) = sqrt(Y(i) * R * Tst(i));                     % speed of sound in air (m/s)
+    V(i) = Mach(i) * a(i);                              % speed of the fluid (m/s)
+end
+
+% enthalpy found from velocity
+
+
+mdot_air = rho(2) * V(2) * A(2);    % Mdot, obvs. kg/s
+f = mdot_fuel / mdot_air;           % air/fuel ratio
+
+%% Theoretical Calculations
+ThThrust = mdot_air*(1+f)*V(6) - mdot_air*V(2);     % Theoretical thrust (N)
+ThTs = (1+f)*V(6)-V(1);                             % Theoretical specific thrust
+ThTSFC = f/ThTs;
+
+%% Efficiencies
+% determine thermodynamic efficiency from stagnation properties 
+%   --> isentropic process determined by new pressure
+state(1) = process(data, 'species', air, 'mass', m_air, 'P', P(3), 's', S(2));
+T0(1) = state(1).T;
+H0s_comp = (enthalpy(data, air, m_air, T0(1)) - enthalpy(data, air, m_air, 0))/1000;  % convert J to kJ
+
+state(2) = process(data, 'species', air, 'mass', m_air, 'P', P(5), 's', S(4));
+T0(2) = state(2).T;
+H0s_turb = (enthalpy(data, air, m_air, T0(2)) - enthalpy(data, air, m_air, 0))/1000;
+
+s4 = entropy(data, air, m_air, T0(2), P(5));
+
+% Specific Thrust
+Ts = thrust / mdot_air;
+
+% Thrust Specific Fuel Consumption
+TSFC = mdot_fuel / thrust;
+
+% Cycle Efficiency
+n_cycle = 1 - ((H0(6)-H0(2)) / ( (H0(4)-H0(3)) - (H0(5)-H0(6)) ) ); % must subtract reheat
+
+% Power Match between compressor and turbine
+PM = ((mdot_air+mdot_fuel) * (H0(4)-H0(5))) / (mdot_air * (H0(3)-H0(2))) ;
+
+% Propulsive Efficiency
+n_prop0 = (thrust*V(2)) / ((mdot_air+mdot_fuel) * (H0(6)-H(6)) - (mdot_air * (H0(2)-H(2))));
+
+% get the propulsive efficiency a different but theoretically equivalent way
+n_prop1 = (thrust*V(2)) / ((mdot_air+mdot_fuel) * (V(6)^2/2) - (mdot_air * (V(2)^2/2)));
+
+% Combustor Efficiency
+Qjeta = 42800 ;    % kJ/kg http://hypertextbook.com/facts/2003/EvelynGofman.shtml
+n_comb = ( (1+f) * H0(4)- H0(3)) / (f * Qjeta);
+
+% Compressor Efficiency
+n_comp =  (H0s_comp - H0(2)) / (H0(3) - H0(2));
+
+% turbine efficiency
+n_turb = (H0(4) - H0(5)) / (H0(4) - H0s_turb);
+
+s_ideal = [s0 s0 s0 s4 s4 s4 s0];
+figure()
+hold on
+plot(S, T,'o')
+plot(s_ideal, [T, T(1)])
+legend('Experimental Data', 'Isentropic Case')
+grid on
+hold off
+
