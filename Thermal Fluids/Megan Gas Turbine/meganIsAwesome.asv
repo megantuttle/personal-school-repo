@@ -1,0 +1,206 @@
+function [RPM, n_cycle, PM, n_prop, n_comp, n_comb, n_turb, n_nozz, thrust,...
+    Ts, TSFC, ThThrust, ThTs, ThTSFC, uTs, uTSFC, uNcyc, uPM,  ] = meganIsAwesome(filename, data)
+
+%% Path setup for getting table values from HOT Calc
+% addpath('/home/megan/Downloads/Gas Turbine/Jet Lab - 3-8-16/DaqViewDataEXCEL',...
+%     '/home/megan/Downloads/Gas Turbine/HOT Thermochemical Calculator/HOT_R2',...
+%     '/home/megan/Downloads/Gas Turbine/HOT Thermochemical Calculator/HOT_R2/HOT',...
+%     '/home/megan/Downloads/Gas Turbine/HOT Thermochemical Calculator/HOT_R2/utility');
+
+%% Define geometry (areas in in^2)
+A = [26.89  % bell inlet
+    5.12	% compressor inlet
+    6.63    % compressor exit
+    11.01	% combustor exit
+    4.34	% turbine exit	
+    3.54]*.00064516;	% nozzle exit	
+
+%% Inputs
+rawdata = xlsread([filename,'.xlsx']);
+air = {'N2', 'O2'};
+m_air = [3.29; 1];
+t_room = 20 + 273.15;      % assumed room temperature K
+p_atm = 101325;            % assumed Pressure, Pa
+s0 = entropy(data, air, m_air, t_room, p_atm);
+
+%% Calculate states
+P(1) = p_atm;  %because the P is the difference between stagnation press and P_atm 
+T(1) = t_room;
+H0(1) = (enthalpy(data, air, m_air, t_room) - enthalpy(data, air, m_air, 0))/1000; % convert J to kJ
+S(1) = entropy(data, air, m_air, t_room, p_atm);
+Y(1) = spratio(data, air, m_air, t_room);
+rho(1) = density(data, air, m_air, T(1), P(1)+p_atm);
+
+for i = 2:6
+    % pressure
+    P(i) = mean((rawdata(10:end,i+1) + 14.7).*6894.76);   % convert to psig to Pa
+    %temperature
+    T(i) = mean(rawdata(10:end,i+9) + 273.15);     % convert to K
+    % entropy, enthalpy, "gamma" aka specific heat ratio, density (kg/m^3)
+    S(i) = mean(entropy(data, air, m_air, T(i), P(i)));
+    H0(i) = mean( (enthalpy(data, air, m_air, T(i)) - enthalpy(data, air, m_air, 0))/1000 );
+    Y(i) = mean(spratio(data, air, m_air, T(i)));
+    rho(i) = density(data, air, m_air, T(i), P(i));   
+end
+
+P(2) = mean((rawdata(10:end,3).*6894.76));
+
+% ideal gas constant
+R = igconstant(data, air, m_air);       
+
+% other stuff
+fuel_type = 0.797/0.26417;  % kg/gal
+mdot_fuel = mean(rawdata(10:end,8))*fuel_type/3600;      % converted gal/hr to kg/s
+RPM = mean(rawdata(10:end,9));
+thrust = mean(rawdata(10:end,10)) * 4.44822;             % converted lbs to N
+
+%% Calculations
+% Mach number, inlet & exit velocity
+coeff = 2/(Y(2)-1);
+ratioP = p_atm/(p_atm - P(2));
+powerY = (Y(2)-1)/Y(2);
+Mach_inlet = sqrt(coeff * (ratioP^powerY - 1));     % Mach number, duh
+Tstatic_inlet = T(2) /(1 + (Y(2)-1)/2 * Mach_inlet^2);      % local static temp
+c = sqrt(Y(2) * R * Tstatic_inlet);                           % speed of sound in air (m/s)
+V_inlet = Mach_inlet * c;                           % speed of the fluid (m/s)
+mdot_air = rho(2) * V_inlet * A(2);           % Mdot, obvs. kg/s
+f = mdot_fuel / mdot_air;               % air/fuel ratio
+H_inlet = (enthalpy(data, air, m_air, Tstatic_inlet) - enthalpy(data, air, m_air, 0))/1000;
+
+% assume we have the right mass flow and iterate to find temp
+Tstatic_exit = 273;   % guess Tstatic for loop
+err = 5;              % initialize error
+while err > 0.01
+    c_exit = sqrt(Y(6)*R*Tstatic_exit);
+    V_exit = mdot_air/(rho(6)*A(6));
+    Mach_exit = V_exit/c_exit;
+    Tstatic = T(6) /(1 + (Y(6)-1)/2 * Mach_exit^2);
+    err = abs(Tstatic - Tstatic_exit);
+    Tstatic_exit = Tstatic;
+end
+
+H_exit = (enthalpy(data, air, m_air, Tstatic_exit) - enthalpy(data, air, m_air, 0))/1000; 
+
+% Thrust
+Ts = thrust / mdot_air;   % Specific Thrust
+TSFC = mdot_fuel / thrust;      % Thrust Specific Fuel Consumption
+
+%% Theoretical Calculations
+ThThrust = mdot_air*(1+f)*V_exit - mdot_air*V_inlet;     % Theoretical thrust (N)
+ThTs = (1+f)*V_exit - V_inlet;                                % Theoretical specific thrust
+ThTSFC = f/ThTs;
+
+%% For component efficiencies, calculate stagnation enthalpy at turbine and compressor exits
+%   --> isentropic process determined by new pressure
+state(1) = process(data, 'species', air, 'mass', m_air, 'P', P(3), 's', S(2));
+T0(1) = state(1).T;
+H0s_comp = (enthalpy(data, air, m_air, T0(1)) - enthalpy(data, air, m_air, 0))/1000;  % convert J to kJ
+
+state(2) = process(data, 'species', air, 'mass', m_air, 'P', P(5), 's', S(4));
+T0(2) = state(2).T;
+H0s_turb = (enthalpy(data, air, m_air, T0(2)) - enthalpy(data, air, m_air, 0))/1000;
+
+state(3) = process(data, 'species', air, 'mass', m_air, 'P', P(6), 's', S(4));
+T0(3) = state(3).T;
+H0s_nozz = (enthalpy(data, air, m_air, T0(3)) - enthalpy(data, air, m_air, 0))/1000;
+
+s4 = entropy(data, air, m_air, T0(2), P(5));
+
+%% Performance
+% Cycle Efficiency
+q_comb = H0(4) - H0(3);
+q_reheat = H0(5) - H0(6);
+q_in = q_comb + q_reheat;
+q_out = H0(6) - H0(2);
+n_cycle = 1 - (q_out/q_in); 
+% Power Match between compressor and turbine
+PM = ((mdot_air+mdot_fuel) * (H0(4)-H0(5))) / (mdot_air * (H0(3)-H0(2))) ;
+% Propulsive Efficiency --> had to convert m^2/s^2 to kJ/kg
+n_prop = (thrust*V_inlet/1000) / ((mdot_air+mdot_fuel)*(H0(6) - H_exit) - (mdot_air*(H0(2) - H_inlet)));
+% Combustor Efficiency
+Qjeta = 42800;    % kJ/kg      http://hypertextbook.com/facts/2003/EvelynGofman.shtml
+n_comb = ( (1+f)*H0(4) - H0(3)) / (f * Qjeta);
+% Compressor Efficiency
+n_comp =  (H0s_comp - H0(2)) / (H0(3) - H0(2));
+% Turbine efficiency
+n_turb = (H0(4) - H0(5)) / (H0(4) - H0s_turb);
+% Nozzle efficiency
+n_nozz = (H0(5) - H0(6)) / (H0(5) - H0s_nozz);
+
+%% Plot it <3
+s_ideal = [s0 s0 s0 s4 s4 s4 s0];
+figure()
+hold on
+for i =2:length(S)
+    plot(S(i),T(i),'r+');
+    text(S(i)-50,T(i),num2str(i-1));
+end
+plot(s_ideal, [T, T(1)], '--')
+grid on
+xlabel 'Entropy, s (kJ/kg)'
+ylabel 'Temperature, T (K)'
+title(filename)
+hold off
+
+%% Calculate uncertainties
+u_P1 = 0.0014*P(2);    % percent FS
+u_P2 = 0.0025*P(3);   
+u_P3 = 0.0025*P(4);    
+u_P4 = 0.0025*P(5);    
+u_P5 = 0.0025*P(6);    
+u_FuelFlow = 1 * fuel_type/3600 * mdot_fuel;
+u_RPM = 0.6*RPM;         
+u_Thrust = 1*4.44822;  % 1 lb converted to N
+
+for i = 1:5   
+    u_T(i) = 0.0075*T(i+1);    % greater of 2.2 C or 0.75 percent
+    if u_T(i) < 2.2
+        u_T(i) = 2.2;
+    else
+        u_T(i) = u_T(i);
+    end
+end
+
+%% Specific thrust uncertainty
+% find uncertainty in mass flow
+dMdotAir_dT = rho(2) * sqrt( (2/(Y(2)-1)) * ( (p_atm/(p_atm-P(2)) )^( (Y(2)-1)/Y(2) ) - 1 ) * Y(2)*R ) * A(2) * T(2)^(-1/2);
+dMdotAir_dP = 1/T(2);
+uMdotAir = sqrt( (dMdotAir_dT * u_T(1))^2 + (dMdotAir_dP * u_P1)^2 );
+
+% find uncertainty in specific thrust
+dTs_dThrust = mdot_air;
+dTs_dMdotAir = 1/thrust;
+uTs = sqrt( (dTs_dThrust * u_Thrust)^2 + (dTs_dMdotAir * uMdotAir)^2 );
+
+%% TSFC uncertainty
+dTSFC_dThrust = mdot_air;
+dTSFC_dMdotFuel = 1/thrust;
+uTSFC = sqrt( (dTSFC_dThrust * u_Thrust)^2 + (dTSFC_dMdotFuel * u_FuelFlow)^2 );
+
+%% Cycle uncertainty
+u_Qin = sqrt( u_P2^2 + u_P3^2 + u_P4^2 + u_P5^2 + u_T(2)^2 + u_T(3)^2 + u_T(4)^2 + u_T(5)^2 );
+u_Qout = sqrt( u_P1^2 + u_P5^2 + u_T(1)^2 + u_T(5)^2 );
+dnCyc_dQin = 1/q_out;
+dnCyc_dQout = 1/q_in;
+uNcyc = sqrt( (dnCyc_dQin * u_Qin)^2 + (dnCyc_dQout * u_Qout)^2 );
+
+%% Power match uncertainty
+dPM_dMdotAir = 1/(H0(4)-H0(5));
+dPM_dFuel = 1/(H0(3)-H0(2));
+dPM_dTurb = mdot_fuel + mdot_air;
+dPM_dComp = mdot_air;
+u_Comp = sqrt( u_P1^2 + u_P2^2 + u_T(1)^2 + u_T(2)^2 );
+u_turb = sqrt( u_P3^2 + u_P4^2 + u_T(3)^2 + u_T(4)^2 );
+uPM = sqrt( (dPM_dMdotAir * uMdotAir)^2 + (dPM_dFuel * u_FuelFlow)^2 + (dPM_dTurb * u_turb)^2 + (dPM_dComp * u_Comp)^2 );
+
+%% Propulsive efficiency uncertainty
+dnProp_dMdotAir = 1/thrust;
+dnProp_dFuel = 1/thrust;
+dnProp_dTurb = mdot_air + mdot_fuel;
+dnProp_dComp = mdot_air;
+uNprop = sqrt( (dnProp_dMdotAir * uMdotAir)^2 + (dnProp_dFuel * u_FuelFlow)^2 + (dnProp_dTurb * u_turb)^2 + (dnProp_dComp * u_Comp)^2 );
+
+%% Combustor efficiency uncertainty
+uComb = sqrt( u_P2^2 + u_P3^2 + u_T(2)^2 + u_T(3)^2 );
+
+end
